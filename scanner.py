@@ -147,32 +147,54 @@ def get_mcap_cr(symbol):
     return 0.0
 
 
-def ensure_universe(force=False):
-    os.makedirs(DATA, exist_ok=True)
-    old = None
-    if os.path.exists(UNIVERSE):
-        old = pd.read_csv(UNIVERSE)
-        age = (now_ist().date() - datetime.strptime(str(old["updated"].iloc[0]), "%Y-%m-%d").date()).days
-        if not force and age < UNIVERSE_MAX_AGE_DAYS:
-            return old[old["mcap_cr"] >= MIN_MCAP_CR]["symbol"].tolist()
-    print("Refreshing NSE universe / market caps (takes a few minutes) ...")
-    r = requests.get(NSE_LIST_URL, headers={"User-Agent": "Mozilla/5.0"}, timeout=30)
-    r.raise_for_status()
-    nse = pd.read_csv(io.StringIO(r.text))
+def list_symbols():
+    """All NSE EQ-series symbols. Uses data/EQUITY_L.csv if you uploaded one, else downloads it."""
+    local = f"{DATA}/EQUITY_L.csv"
+    if os.path.exists(local):
+        text = open(local, encoding="utf-8", errors="ignore").read()
+    else:
+        try:
+            r = requests.get(NSE_LIST_URL, headers={"User-Agent": "Mozilla/5.0"}, timeout=30)
+            r.raise_for_status()
+            text = r.text
+        except Exception as ex:
+            raise SystemExit(f"Could not download the NSE list ({ex}). Download EQUITY_L.csv from "
+                             "NSE and upload it into the data folder of the repo.")
+    nse = pd.read_csv(io.StringIO(text))
     nse.columns = [c.strip() for c in nse.columns]
-    symbols = sorted(nse[nse["SERIES"].str.strip() == "EQ"]["SYMBOL"].str.strip().unique())
-    with ThreadPoolExecutor(4) as ex:
-        caps = list(ex.map(get_mcap_cr, symbols))
-    m = pd.DataFrame({"symbol": symbols, "mcap_cr": caps, "updated": today()})
-    ok = int((m["mcap_cr"] > 0).sum())
-    print(f"Market cap resolved for {ok}/{len(symbols)} symbols")
-    if ok < 0.5 * len(symbols):
-        if old is not None:
-            print("Fetch mostly failed - keeping previous universe file.")
-            return old[old["mcap_cr"] >= MIN_MCAP_CR]["symbol"].tolist()
-        raise SystemExit("Market cap fetch failed and no cached universe exists.")
-    m.to_csv(UNIVERSE, index=False)
-    return m[m["mcap_cr"] >= MIN_MCAP_CR]["symbol"].tolist()
+    return sorted(nse[nse["SERIES"].str.strip() == "EQ"]["SYMBOL"].str.strip().unique())
+
+
+def download_batch(symbols, complete_only=True, chunk=80):
+    """Weekly data for many symbols with few requests (80 tickers per call)."""
+    out = {}
+    for i in range(0, len(symbols), chunk):
+        part = symbols[i:i + chunk]
+        df = None
+        for attempt in range(3):
+            try:
+                df = yf.download([f"{x}.NS" for x in part], period="3y", interval="1wk",
+                                 group_by="ticker", auto_adjust=False, progress=False, threads=True)
+                if df is not None and not df.empty:
+                    break
+            except Exception:
+                pass
+            time.sleep(3 * (attempt + 1))
+        if df is None or df.empty:
+            continue
+        for x in part:
+            try:
+                d = df[f"{x}.NS"][["Open", "High", "Low", "Close"]].dropna()
+            except Exception:
+                continue
+            if d.empty:
+                continue
+            d.index = pd.to_datetime(d.index).tz_localize(None)
+            if complete_only and (now_ist().date() - d.index[-1].date()).days < 5:
+                d = d.iloc[:-1]
+            out[x] = d
+        print(f"Downloaded {min(i + chunk, len(symbols))}/{len(symbols)}")
+    return out
 
 
 # ----------------------------------------------------------------- journal ops
@@ -202,24 +224,25 @@ def new_trade(symbol, date, price, sma, r4):
 
 
 # ----------------------------------------------------------------- modes
-def analyze(symbol):
-    wk = fetch_weekly(symbol, complete_only=True)
-    if wk is None or len(wk) < 60:
-        return symbol, None
-    return symbol, prep(wk).dropna(subset=["SMA", "R4"])
-
-
 def run_weekly(force_universe=False):
     journal = load_journal()
     events = []
     open_rows = {r["symbol"]: r for r in journal if r["status"] == "OPEN"}
-    symbols = sorted(set(ensure_universe(force_universe)) | set(open_rows))
-    print(f"Scanning {len(symbols)} symbols ...")
-    with ThreadPoolExecutor(8) as ex:
-        results = dict(ex.map(analyze, symbols))
+    symbols = sorted(set(list_symbols()) | set(open_rows))
+    print(f"Downloading weekly data for {len(symbols)} symbols ...")
+    data = download_batch(symbols)
+    for sym in open_rows:                      # make sure open positions always have data
+        if sym not in data:
+            wk = fetch_weekly(sym, complete_only=True)
+            if wk is not None:
+                data[sym] = wk
 
-    for sym, wk in results.items():
-        if wk is None or len(wk) < 2:
+    candidates = []
+    for sym, raw in data.items():
+        if len(raw) < 60:
+            continue
+        wk = prep(raw).dropna(subset=["SMA", "R4"])
+        if len(wk) < 2:
             continue
         last, prev = wk.iloc[-1], wk.iloc[-2]
         wdate = wk.index[-1].strftime("%Y-%m-%d")
@@ -227,10 +250,7 @@ def run_weekly(force_universe=False):
         row = open_rows.get(sym)
         if row is None:
             if float(prev["Close"]) <= r4 < c:  # fresh weekly close above yearly R4
-                journal.append(new_trade(sym, wdate, c, sma, r4))
-                events.append(event("ENTRY", sym, c,
-                                    f"Weekly close crossed above yearly R4 {r4:.2f}. "
-                                    f"SL (weekly SMA20) = {sma:.2f}"))
+                candidates.append((sym, wdate, c, sma, r4))
         elif wdate > row["last_week"]:
             row["last_week"] = wdate
             if c < sma:
@@ -245,6 +265,18 @@ def run_weekly(force_universe=False):
                                     f"Weekly SMA20 {sma:.2f} touched last entry. Added unit #{len(legs)} "
                                     f"at {c:.2f}. Stop now {sma:.2f}"))
             refresh_row(row, c, sma)
+
+    print(f"{len(candidates)} R4 crossovers found - checking market caps ...")
+    for sym, wdate, c, sma, r4 in candidates:   # market cap is checked only for actual signals
+        mc = get_mcap_cr(sym)
+        if 0 < mc < MIN_MCAP_CR:
+            print(f"  skip {sym}: market cap {mc:,.0f} Cr")
+            continue
+        note = f"Market cap {mc:,.0f} Cr" if mc > 0 else "Market cap unverified"
+        journal.append(new_trade(sym, wdate, c, sma, r4))
+        events.append(event("ENTRY", sym, c,
+                            f"Weekly close crossed above yearly R4 {r4:.2f}. "
+                            f"SL (weekly SMA20) = {sma:.2f}. {note}"))
     finish(journal, events)
 
 
