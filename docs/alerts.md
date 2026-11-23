@@ -7,3 +7,4 @@
 - **ENTRY** PNB @ 155.33 - Weekly close crossed above yearly R4 148.64. SL (weekly SMA20) = 118.82. Market cap 178,520 Cr
 - **ENTRY** RAYMOND @ 1194.60 - Weekly close crossed above yearly R4 1189.48. SL (weekly SMA20) = 897.87. Market cap 7,996 Cr
 - **ENTRY** SUNTV @ 685.00 - Weekly close crossed above yearly R4 678.58. SL (weekly SMA20) = 540.82. Market cap 27,357 Cr
+- **SL_HIT** KIRLOSENG @ 1710.00 - Daily close below weekly SMA20. SL(SMA20)=2068.40, units=1, avg=1710.00, P/L=0.00%
