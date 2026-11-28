@@ -7,3 +7,8 @@ date,type,symbol,price,details
 2026-11-23,ENTRY,RAYMOND,1194.60,"Weekly close crossed above yearly R4 1189.48. SL (weekly SMA20) = 897.87. Market cap 7,996 Cr"
 2026-11-23,ENTRY,SUNTV,685.00,"Weekly close crossed above yearly R4 678.58. SL (weekly SMA20) = 540.82. Market cap 27,357 Cr"
 2026-11-23,SL_HIT,KIRLOSENG,1710.00,"Daily close below weekly SMA20. SL(SMA20)=2068.40, units=1, avg=1710.00, P/L=0.00%"
+2026-11-28,ENTRY,ABDL,838.00,"Weekly close crossed above yearly R4 809.79. SL (weekly SMA20) = 673.76. Market cap 23,440 Cr"
+2026-11-28,ENTRY,ACE,1325.70,"Weekly close crossed above yearly R4 1325.25. SL (weekly SMA20) = 1133.35. Market cap 15,781 Cr"
+2026-11-28,ENTRY,BELRISE,241.04,"Weekly close crossed above yearly R4 240.57. SL (weekly SMA20) = 231.99. Market cap 23,312 Cr"
+2026-11-28,ENTRY,GREAVESCOT,322.69,"Weekly close crossed above yearly R4 269.03. SL (weekly SMA20) = 218.89. Market cap 7,517 Cr"
+2026-11-28,ENTRY,JLHL,345.30,"Weekly close crossed above yearly R4 335.52. SL (weekly SMA20) = 291.42. Market cap 11,320 Cr"
